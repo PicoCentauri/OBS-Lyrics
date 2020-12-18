@@ -27,10 +27,11 @@ source_data = {}
 source_def = {}
 source_def.id = "Prepare_Lyrics"
 source_def.type = OBS_SOURCE_TYPE_INPUT;
-source_def.output_flags = bit.bor(obs.OBS_SOURCE_CUSTOM_DRAW )
+source_def.output_flags = bit.bor(obs.OBS_SOURCE_CUSTOM_DRAW)
 
 obs = obslua
 source_name = ""
+source_name_next = ""
 windows_os = false
 first_open = true
 
@@ -40,7 +41,7 @@ visible = false
 displayed_song = ""
 lyrics = {}
 display_index = 1
-prepared_index = 1---
+prepared_index = 1
 song_directory = {}
 prepared_songs = {}
 TextSources = {}
@@ -295,21 +296,25 @@ end
 -- updates the displayed lyrics
 function update_lyrics_display()
 	local text = ""
-	if visible and #lyrics > 0 then
-		text = lyrics[display_index]
-	end
-	local source = obs.obs_get_source_by_name(source_name)
-	if source ~= nil then
-		local settings = obs.obs_data_create()
-		obs.obs_data_set_string(settings, "text", text)
-		obs.obs_data_set_int(settings, "Opacity", 0)    
-		obs.obs_data_set_int(settings, "Outline.Opacity", 0)    
-		obs.obs_source_update(source, settings)
-		obs.obs_data_release(settings)
-	end
-	obs.obs_source_release(source)	
-	if visible then
-		text_fade_dir = 2   -- new text so just fade up if not already
+	local source_names = {source_name, source_name_next}
+
+	for i = 1, #source_names do
+		if visible and #lyrics > 0 then
+			text = lyrics[display_index + i - 1]
+		end
+		local source = obs.obs_get_source_by_name(source_names[i])
+		if source ~= nil then
+			local settings = obs.obs_data_create()
+			obs.obs_data_set_string(settings, "text", text)
+			obs.obs_data_set_int(settings, "Opacity", 0)
+			obs.obs_data_set_int(settings, "Outline.Opacity", 0)
+			obs.obs_source_update(source, settings)
+			obs.obs_data_release(settings)
+		end
+		obs.obs_source_release(source)
+		if visible then
+			text_fade_dir = 2   -- new text so just fade up if not already
+		end
 	end
 
 end
@@ -520,6 +525,7 @@ end
 -- delete song button
 -- lines to display counter
 -- text source list
+-- text source list next
 -- prepared songs list
 -- clear prepared button
 -- advance lyric button
@@ -550,6 +556,7 @@ function script_properties()
 	obs.obs_properties_add_bool(script_props, "text_fade_enabled", "Fade Text Out/In for Next Lyric")	-- Fade Enable (WZ)
 	obs.obs_properties_add_int_slider(script_props, "text_fade_speed", "Fade Speed", 1, 20, 1)
 	local source_prop = obs.obs_properties_add_list(script_props, "prop_source_list", "Text Source", obs.OBS_COMBO_TYPE_EDITABLE, obs.OBS_COMBO_FORMAT_STRING)
+	local source_prop_next = obs.obs_properties_add_list(script_props, "prop_source_list_next", "Text Source Next", obs.OBS_COMBO_TYPE_EDITABLE, obs.OBS_COMBO_FORMAT_STRING)
 	local sources = obs.obs_enum_sources()
 	if sources ~= nil then
 		local n = {}
@@ -562,6 +569,7 @@ function script_properties()
 		table.sort(n)
 		for _, name in ipairs(n) do
 			obs.obs_property_list_add_string(source_prop, name, name)
+			obs.obs_property_list_add_string(source_prop_next, name, name)
 		end
 	end
 	obs.source_list_release(sources)
@@ -610,40 +618,50 @@ print("Do Lyric Update")
 		display_lines = cur_display_lines
 		reload = true
 	end
-	local cur_source_name = obs.obs_data_get_string(settings, "prop_source_list")
-	if source_name ~= cur_source_name then
-		local source = obs.obs_get_source_by_name(source_name)
-		if source ~= nil then
+	source_lists = {'prop_source_list', 'prop_source_list_next'}
+	source_names = {'', ''}
+	for i = 1, #source_lists do
+		local cur_source_name = obs.obs_data_get_string(settings, source_lists[i])
+		if source_name ~= cur_source_name then
+			local source = obs.obs_get_source_by_name(source_name)
+			if source ~= nil then
+				sh = obs.obs_source_get_signal_handler(source)
+				obs.signal_handler_disconnect(sh,"show",showText)  --Clear Showing Text Callback
+				obs.signal_handler_disconnect(sh,"hide",hideText) --Clear Not Showing Text Callback
+			end
+			obs.obs_source_release(source)
+			source_names[i] = cur_source_name
+			print(source_names[i])
+			local source = obs.obs_get_source_by_name(source_name)
 			sh = obs.obs_source_get_signal_handler(source)
-			obs.signal_handler_disconnect(sh,"show",showText)   --Clear Showing Text Callback			
-			obs.signal_handler_disconnect(sh,"hide",hideText)	   --Clear Not Showing Text Callback
+			obs.signal_handler_connect(sh,"show",showText)   --Set Showing Text Callback			
+			obs.signal_handler_connect(sh,"hide",hideText)   --Set Not Showing Text Callback
+			obs.obs_source_release(source)
+			reload = true
 		end
-		obs.obs_source_release(source)	
-		source_name = cur_source_name	
-		print(source_name)		
-		local source = obs.obs_get_source_by_name(source_name)
-		sh = obs.obs_source_get_signal_handler(source)
-		obs.signal_handler_connect(sh,"show",showText)   --Set Showing Text Callback			
-		obs.signal_handler_connect(sh,"hide",hideText)	   --Set Not Showing Text Callback
-		obs.obs_source_release(source)	
-		reload = true
 	end
+	source_name = source_names[1]
+	source_name_next = source_names[2]
+
 	local cur_ensure_lines = obs.obs_data_get_bool(settings, "prop_lines_bool")
 	if cur_ensure_lines ~= ensure_lines then
 		ensure_lines = cur_ensure_lines
 		reload = true
 	end
+
 	if reload then
 		prepare_lyrics(displayed_song)
 		display_index = 1
 		update_lyrics_display()
 	end
+
 end
 
 -- A function named script_defaults will be called to set the default settings
 function script_defaults(settings)
 	obs.obs_data_set_default_int(settings, "prop_lines_counter", 2)
-	obs.obs_data_set_default_string(settings, "prop_source_list", prepared_songs[1] )
+	obs.obs_data_set_default_string(settings, "prop_source_list", prepared_songs[1])
+	obs.obs_data_set_default_string(settings, "prop_source_list_next", prepared_songs[1])
 	if #prepared_songs ~= 0 then 
 	    displayed_song = prepared_songs[1]
 	else
